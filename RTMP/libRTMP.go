@@ -14,71 +14,127 @@ type RTMPScore struct{
     score   int
 }
 
-type RTMPObj struct{
-    current_position  map[string]int
-    cursor            int
-    max_elements      int
-    lru_list          []*RTMPScore
-}
-func initRTMPObj() *RTMPObj{
-    o := new(RTMPObj)
-    o.current_position = make(map[string]int)
-    o.cursor = 0
-    o.lru_list = make([]*RTMPScore, 1000000)
-    o.max_elements = 1000000
-    return o
+type RTMPObj interface{
+    GetCurrentPositionForKey(key string) (int, error)
+    SetCurrentPositionForKey(key string, position int) error
+    GetRTMPScoreForKey(key string) (*RTMPScore, error)
+
+    GetRTMPScoreFromPosition(position int) (*RTMPScore, error)
+    SetRTMPScoreAtPosition(r *RTMPScore, position int) error
+
+    GetDBName() string
+
+    GetCursor() (int,error)
+    SetCursor(position int) error
+
+    GetMaxElements() (int, error)
+    SetMaxElements(amt int) error
+
+    DeleteKey(key string)
 }
 
-func (o *RTMPObj) addNewEntry(key string, value int){
+func addNewEntry(o RTMPObj, key string, value int, position int){
     key_info := RTMPScore{key, value}
-    o.lru_list[o.cursor] = &key_info
-    o.current_position[key] = o.cursor
+    //fmt.Printf("in here loading for %s\n", key)
+    o.SetCurrentPositionForKey(key, position)
+    o.SetRTMPScoreAtPosition(&key_info, position)
 }
 
-func (o *RTMPObj) addObject(key string, value int){
+func addObject(o RTMPObj, key string, value int){
     //1. find the object
-    location, ok := o.current_position[key]
-    if(ok == true){ //found the key
+    location, err := o.GetCurrentPositionForKey(key)
+    if(err == nil){ //found the key
         //2. if it does exist increase its value
-        o.lru_list[location].score += value
+        rtmpObj,err := o.GetRTMPScoreFromPosition(location)
+        if(err != nil){
+            return
+        }
+        rtmpObj.score += value
+        o.SetRTMPScoreAtPosition(rtmpObj, location)
     } else {
         //3. if it doesnt exist 
         //3a.    if no object exists in the current location - add this object
-        if((o.lru_list[o.cursor] == nil) || (o.lru_list[o.cursor].score == 0)){ //simply add the element
-            o.addNewEntry(key, value)
+        location,err = o.GetCursor()
+        if(err != nil){
+            return
+        }
+        rtmpObj,_ := o.GetRTMPScoreFromPosition(location)
+        if((rtmpObj == nil) || (rtmpObj.score == 0)){ //simply add the element
+            addNewEntry(o, key, value, location)
         } else{ //3b.    else reduce the count of the object at the current location and if it drops to 0 - add this new object
-            o.lru_list[o.cursor].score--
-            if(o.lru_list[o.cursor].score == 0){
-                delete(o.current_position, key) //remove the existing entry
-                o.addNewEntry(key, value) //add the new entry
+            rtmpObj.score--
+            if(rtmpObj.score == 0){
+                //TODO: delete key
+                o.DeleteKey(key)
+                addNewEntry(o, key, value, location) //add the new entry
+            } else{
+                o.SetRTMPScoreAtPosition(rtmpObj, location)
             }
         }
-        o.cursor++ //move the cursor forward
-        o.cursor %= o.max_elements
+        location++
+        get_max_val, _ := o.GetMaxElements()
+        location %= get_max_val
+        o.SetCursor(location)
     }
 }
-func (o *RTMPObj) addObjectOne(key string){
-    o.addObject(key, 1)
+func addObjectOne(o RTMPObj, key string){
+    addObject(o, key, 1)
     return
 }
 
-func (o *RTMPObj) getValue(key string) (int, bool) {
-    location, found := o.current_position[key]
-    if(found == true){ //found the key
-        return o.lru_list[location].score, found
+func getValue(o RTMPObj, key string) (int, bool) {
+    /*
+    location, err := o.GetCurrentPositionForKey(key)
+    if(err != nil){
+        return 0, false
     }
-    return 0,found
+    fmt.Printf("here3a with position = %d\n", location)
+
+    score_obj, err := o.GetRTMPScoreFromPosition(location)
+    if(err != nil){
+        return 0, false
+    }
+    return score_obj.score, true
+    */
+    //fmt.Printf("name = %s", o.GetDBName())
+    score_obj, err := o.GetRTMPScoreForKey(key)
+    if(err != nil){
+        return 0, false
+    }
+    return score_obj.score, true
 }
 
 
 
 /////Fetch an instance
-var global_rtmp_obj *RTMPObj
-func getRTMPObject(request string) *RTMPObj{
-    if(global_rtmp_obj == nil){
-        global_rtmp_obj = initRTMPObj()
+var global_rtmp_map map[string]RTMPObj
+func getRTMPObject(request string) RTMPObj{
+    if(global_rtmp_map == nil){
+        global_rtmp_map = make(map[string]RTMPObj)
     }
-    return global_rtmp_obj
+
+    o, ok := global_rtmp_map[request]
+    if(ok == false){ //didnt find the object
+        l := new(LevelDBRTMPObj)
+        err := l.initLRTMPObj(request)
+        if(err != nil){
+            return nil
+        }
+
+        count, err := l.GetCursor()
+        if(count == 0 || err != nil){
+            l.SetCursor(0)
+        }
+        count, err = l.GetMaxElements()
+        if(count == 0 || err != nil){
+            l.SetMaxElements(1000000)
+        }
+        o = l
+        global_rtmp_map[request] = o
+    }
+
+    //fmt.Printf("returning %v\n", o)
+    return o
 }
 
 
@@ -105,7 +161,8 @@ func fillQueryMap(r *http.Request) map[string]string{
     query := r.URL.RawQuery
     if(len(query) > 0){ //break up the string
         split_list := strings.Split(query, "&")
-        for i:=0; i<len(split_list); i++ {
+        split_list_len := len(split_list)
+        for i:=0; i< split_list_len; i++ {
             split_value := strings.Split(split_list[i], "=")
             if(len(split_value) == 2) {
                 query_map[split_value[0]] = split_value[1]
@@ -129,7 +186,19 @@ func Get(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    value,_ := getRTMPObject("").getValue(key_name)
+    collection_name, err := query_map["collection"]
+    if(err == false){
+        errorResponse(w, 400, "Bad Request - collection not provided")
+        return
+    }
+
+    /*
+    getRTMPObject(collection_name)
+    fmt.Fprintf(w, `{"%s":%d}`, "x", 15)
+    return;
+    */
+
+    value,_ := getValue(getRTMPObject(collection_name), key_name)
     fmt.Fprintf(w, `{"%s":%d}`, key_name, value)
 }
 
@@ -146,11 +215,17 @@ func Add(w http.ResponseWriter, r *http.Request) {
         return
     }
 
+    collection_name, err := query_map["collection"]
+    if(err == false){
+        errorResponse(w, 400, "Bad Request - collection not provided")
+        return
+    }
+
     value, ok := query_map["value"]
     if(ok == true){
         amt_to_add, err_val := strconv.Atoi(value)
         if (err_val == nil){
-            getRTMPObject("").addObject(key_name, amt_to_add)
+            addObject(getRTMPObject(collection_name), key_name, amt_to_add)
         }else{
             errorResponse(w, 400, "Bad request - value incorrect")
             return
@@ -160,6 +235,4 @@ func Add(w http.ResponseWriter, r *http.Request) {
         errorResponse(w, 400, "Bad request - value not provided")
         return
     }
-
-    //time.Sleep(5 * time.Second)
 }
