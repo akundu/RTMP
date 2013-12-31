@@ -14,7 +14,7 @@ type LevelDBRTMPObj struct{
 
 func (o* LevelDBRTMPObj) initLRTMPObj(name string) error{
     opts := levigo.NewOptions()
-    opts.SetCache(levigo.NewLRUCache(3<<30))
+    opts.SetCache(levigo.NewLRUCache(2*1024*1024*1024-1))
     opts.SetCreateIfMissing(true)
 
     o.name = "/tmp/" + name
