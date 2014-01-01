@@ -34,10 +34,9 @@ type RTMPObj interface{
 }
 
 func addNewEntry(o RTMPObj, key string, value int, position int){
-    key_info := RTMPScore{key, value}
     //fmt.Printf("in here loading for %s\n", key)
     o.SetCurrentPositionForKey(key, position)
-    o.SetRTMPScoreAtPosition(&key_info, position)
+    o.SetRTMPScoreAtPosition(&RTMPScore{key, value}, position)
 }
 
 func addObject(o RTMPObj, key string, value int){
@@ -62,13 +61,15 @@ func addObject(o RTMPObj, key string, value int){
         if((rtmpObj == nil) || (rtmpObj.score == 0)){ //simply add the element
             addNewEntry(o, key, value, location)
         } else{ //3b.    else reduce the count of the object at the current location and if it drops to 0 - add this new object
+            //TODO: call reduceScore (which should delete the obj if the score is 0
+            //TODO: then return the current score
+            //TODO: if the returned score is 0 - simply add the new entry
+
             rtmpObj.score--
             if(rtmpObj.score == 0){
-                //TODO: delete key
+                //delete key
                 o.DeleteKey(key)
                 addNewEntry(o, key, value, location) //add the new entry
-            } else{
-                o.SetRTMPScoreAtPosition(rtmpObj, location)
             }
         }
         location++

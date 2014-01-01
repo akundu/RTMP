@@ -3,6 +3,7 @@ package RTMP
 import "strconv"
 //import "fmt"
 import "github.com/jmhodges/levigo"
+import "time"
 
 ////The real guts
 type LevelDBRTMPObj struct{
@@ -16,6 +17,8 @@ func (o* LevelDBRTMPObj) initLRTMPObj(name string) error{
     opts := levigo.NewOptions()
     opts.SetCache(levigo.NewLRUCache(2*1024*1024*1024-1))
     opts.SetCreateIfMissing(true)
+    filter := levigo.NewBloomFilter(10)
+    opts.SetFilterPolicy(filter)
 
     o.name = "/tmp/" + name
     db, err := levigo.Open(o.name, opts)
@@ -27,6 +30,10 @@ func (o* LevelDBRTMPObj) initLRTMPObj(name string) error{
     o.ro = levigo.NewReadOptions()
 
     //fmt.Printf("db set")
+    //start the go routine that periodically reduces the count of stuff
+	go func() {
+        time.Sleep(60 * time.Second)
+	}()
     return nil
 }
 
